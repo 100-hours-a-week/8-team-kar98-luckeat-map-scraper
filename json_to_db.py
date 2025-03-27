@@ -65,19 +65,17 @@ def save_to_database(connection, data):
         # 필요한 데이터 추출
         place_id = store.get('place_id', '')
         name = store.get('name', '')
-        address = store.get('formatted_address', '')
+        address = store.get('address', '')
         
-        # 좌표 정보
-        lat = store.get('geometry', {}).get('location', {}).get('lat', 0)
-        lng = store.get('geometry', {}).get('location', {}).get('lng', 0)
+        # 좌표 정보 - 직접 latitude, longitude 필드에서 가져옴
+        lat = store.get('latitude', 0)
+        lng = store.get('longitude', 0)
         
-        # 연락처
-        phone = store.get('formatted_phone_number', None)
+        # 연락처 - phone 필드에서 가져옴
+        phone = store.get('phone', None)
         
-        # 영업시간
-        opening_hours = None
-        if 'opening_hours' in store and 'weekday_text' in store['opening_hours']:
-            opening_hours = '\n'.join(store['opening_hours']['weekday_text'])
+        # 영업시간 - opening_hours 필드에서 가져옴
+        opening_hours = store.get('opening_hours', None)
         
         # 웹사이트
         website = store.get('website', None)
