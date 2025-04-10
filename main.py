@@ -334,51 +334,32 @@ def clean_data_for_excel(data_list):
 start_time = time.time()
 print(f"프로그램 시작 시간: {datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}")
 
-# 여러 검색어와 지역 설정
-search_queries = [
-    {
-        "query": "한식",
-        "location": "37.395045, 127.111028",
-        "radius": 2000,
-        "grid_radius": 50,
-        "area_name": "판교" 
-    },
-    {
-        "query": "중식",
-        "location": "37.395045, 127.111028",
-        "radius": 2000,
-        "grid_radius": 50,
-        "area_name": "판교" 
-    },
-    {
-        "query": "양식",
-        "location": "37.395045, 127.111028",
-        "radius": 2000,
-        "grid_radius": 50,
-        "area_name": "판교" 
-    },
-    {
-        "query": "일식",
-        "location": "37.395045, 127.111028",
-        "radius": 2000,
-        "grid_radius": 50,
-        "area_name": "판교" 
-    },
-    {
-        "query": "베이커리",
-        "location": "37.395045, 127.111028",
-        "radius": 2000,
-        "grid_radius": 50,
-        "area_name": "판교" 
-    },
-    {
-        "query": "포케",
-        "location": "37.395045, 127.111028",
-        "radius": 2000,
-        "grid_radius": 50,
-        "area_name": "판교" 
-    }
+# 검색할 카테고리 리스트
+search_categories = [
+    "한식",
+    "중식",
+    "양식",
+    "일식",
+    "베이커리",
+    "포케"
 ]
+
+# 공통 검색 속성 설정
+common_search_params = {
+    "location": "37.395045, 127.111028",
+    "radius": 2000,
+    "grid_radius": 300,
+    "area_name": "판교"
+}
+
+# 여러 검색어와 지역 설정 - 공통 속성 적용
+search_queries = []
+for category in search_categories:
+    query_item = {
+        "query": category,
+        **common_search_params  # 공통 속성 복사
+    }
+    search_queries.append(query_item)
 
 # 새로운 그리드 생성 함수 추가
 def generate_grid(center_lat, center_lng, main_radius, cell_radius):#
@@ -397,8 +378,8 @@ def generate_grid(center_lat, center_lng, main_radius, cell_radius):#
     grid = []
     earth_radius = 6371000  # 지구 반지름(m)
     
-    # 수정 제안: 셀 중심 간격을 셀 반경의 2배로 설정
-    step_multiplier = 2.0  # 셀 반경 대비 중심 간격 배율 (2.0이면 지름 간격)
+    # 수정: 셀 중심 간격을 셀 반경의 4배로 설정하여 중복을 줄임
+    step_multiplier = 4.0  # 셀 반경 대비 중심 간격 배율 (기존 2.0에서 4.0으로 증가)
     
     # steps 계산 추가 (NameError 해결)
     if cell_radius <= 0: # 0으로 나누는 것을 방지
@@ -465,6 +446,9 @@ def adaptive_grid(center_lat, center_lng, main_radius, min_cell_radius=100, max_
     Returns:
         list: (coordinate_string, cell_radius) 튜플의 리스트
     """
+    # 지구 반경 정의 추가 (m 단위)
+    earth_radius = 6371000
+    
     if not query or not api_key:
         # API 키나 쿼리가 없으면 기본 그리드 생성 (반경 정보 추가) - 이 경우는 거의 없을 것으로 예상
         grid_coords = generate_grid(center_lat, center_lng, main_radius, min_cell_radius)
@@ -475,14 +459,36 @@ def adaptive_grid(center_lat, center_lng, main_radius, min_cell_radius=100, max_
 
     # 재귀 호출을 위한 내부 헬퍼 함수 정의
     processed_cells_cache = set() # 재귀 중복 처리 방지용 캐시
+    
+    # 중복 좌표 방지를 위한 좌표 근접성 확인 함수 추가
+    def is_too_close(lat1, lng1):
+        """이미 처리된 좌표와 너무 가까운지 확인"""
+        for cached_key in processed_cells_cache:
+            if "_" in cached_key:  # 좌표 정보가 포함된 캐시 키인지 확인
+                parts = cached_key.split("_")
+                if len(parts) >= 2:
+                    try:
+                        lat2, lng2 = float(parts[0]), float(parts[1])
+                        # 두 좌표 간 거리 계산 (미터 단위)
+                        dlat = lat2 - lat1
+                        dlng = lng2 - lng1
+                        a = math.sin(math.radians(dlat)/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(math.radians(dlng)/2)**2
+                        distance = 2 * earth_radius * math.asin(math.sqrt(a))
+                        
+                        # 기존 셀 반경의 3배 이내에 있으면 너무 가까운 것으로 판단
+                        if distance < min_cell_radius * 3:
+                            return True
+                    except ValueError:
+                        continue
+        return False
 
     def _recursive_grid_search(cell_lat, cell_lng, current_radius):
         """ 재귀적으로 셀을 검색하고 분할하는 내부 함수 """
         # 캐시 키 생성 (위도, 경도, 반경 조합)
-        cell_key = f"{cell_lat:.6f},{cell_lng:.6f},{current_radius:.1f}"
+        cell_key = f"{cell_lat:.6f}_{cell_lng:.6f}_{current_radius:.1f}"
         # 이미 처리된 셀이면 빈 리스트 반환 (중복 방지)
-        if cell_key in processed_cells_cache:
-            # print(f"    └ 캐시됨: ({cell_lat},{cell_lng}), 반경={current_radius}m") # 디버깅용
+        if cell_key in processed_cells_cache or is_too_close(cell_lat, cell_lng):
+            # print(f"    └ 캐시됨 또는 너무 가까움: ({cell_lat},{cell_lng}), 반경={current_radius}m") # 디버깅용
             return []
         processed_cells_cache.add(cell_key) # 처리 시작 시 캐시에 추가
 
@@ -612,10 +618,33 @@ area_stats = {}
 # 쿼리별 데이터를 저장할 딕셔너리
 query_data_dict = {}
 
-# 카테고리별 수집된 장소 ID를 저장할 딕셔너리 추가
+# 카테고리별 수집된 장소 ID를 저장할 딕셔너리
 category_ids = {}
 # 카테고리간 중복 제거된 장소를 저장할 딕셔너리
 unique_by_category = {}
+
+# 그리드 생성을 한 번만 수행하고 재사용
+print("\n그리드 생성 시작 - 모든 카테고리에서 공통으로 사용할 그리드를 생성합니다...")
+# common_search_params에서 필요한 값들 가져오기
+center_lat, center_lng = map(float, common_search_params["location"].split(','))
+main_radius = common_search_params["radius"]
+min_cell_radius = common_search_params.get("grid_radius", 100)
+# max_cell_radius 계산 
+max_cell_radius = max(min(main_radius / 3, 1000), min_cell_radius * 1.1)
+
+# 모든 카테고리에서 공통으로 사용할 그리드 생성
+# 첫 번째 카테고리를 사용하여 그리드를 생성 (모든 카테고리가 같은 위치, 반경을 사용하므로)
+common_grid_points = adaptive_grid(
+    center_lat, center_lng,
+    main_radius,
+    min_cell_radius=min_cell_radius,
+    max_cell_radius=max_cell_radius,
+    result_threshold=20,
+    query=search_categories[0], # 첫 번째 카테고리 사용
+    api_key=API_KEY,
+    language=language
+)
+print(f"공통 그리드 생성 완료: 총 {len(common_grid_points)}개 셀 생성")
 
 # ThreadPoolExecutor 생성 (최대 워커 수 지정, 필요시 조절)
 # with 문을 사용하여 자동으로 shutdown 되도록 함
@@ -640,25 +669,10 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
         # 현재 쿼리의 리뷰 요약 작업을 저장할 리스트
         summary_futures = [] # 추가
         
-        # 적응형 그리드 생성 (반환값이 (좌표, 반경) 튜플 리스트임)
-        center_lat, center_lng = map(float, search_item["location"].split(','))
-        min_cell_radius = search_item.get("grid_radius", 100) # search_queries에서 가져옴
-        # max_cell_radius 계산 시 min_cell_radius보다 작아지지 않도록 보장
-        # 전체 반경의 1/3 또는 1000m 중 작은 값으로 하되, min_cell_radius*1.1 보다는 크게 설정
-        max_cell_radius = max(min(search_item.get("radius", 3000) / 3, 1000), min_cell_radius * 1.1) 
+        # 공통 그리드 사용 (각 쿼리별로 새로 생성하지 않음)
+        grid_points_with_radius = common_grid_points
 
-        grid_points_with_radius = adaptive_grid( # 변수명 변경
-            center_lat, center_lng,
-            search_item["radius"], # 전체 검색 반경
-            min_cell_radius=min_cell_radius, # 최소 셀 반경
-            max_cell_radius=max_cell_radius, # 최대 셀 반경
-            result_threshold=20, # 임계값을 20으로 수정
-            query=search_item["query"],
-            api_key=API_KEY,
-            language=language
-        )
-
-        print(f"'{search_item['query']}' - {search_item['area_name']} 지역 적응형 그리드 검색 시작 (총 {len(grid_points_with_radius)}개 셀)")
+        print(f"'{current_query}' - {search_item['area_name']} 지역 검색 시작 (미리 생성된 {len(grid_points_with_radius)}개 셀 사용)")
 
         excluded_count = 0
 
@@ -705,6 +719,23 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
                             excluded_count += 1
                             continue # 다음 장소로
 
+                        # 장소의 위도, 경도 확인 및 중심점과의 거리 계산
+                        if "geometry" in place and "location" in place["geometry"]:
+                            place_lat = place["geometry"]["location"]["lat"]
+                            place_lng = place["geometry"]["location"]["lng"]
+                            
+                            # 검색 중심점과의 거리 계산
+                            center_lat, center_lng = map(float, grid_point.split(','))
+                            distance_to_center = calculate_distance(center_lat, center_lng, place_lat, place_lng)
+                            
+                            # 장소가 지정된 반경을 초과하는지 확인 (10% 여유 허용)
+                            if distance_to_center > cell_search_radius * 1.1:
+                                print(f"    └ 반경 초과 장소 건너뛰기: {place_name}, 거리: {distance_to_center:.1f}m > 반경: {cell_search_radius}m")
+                                continue # 반경을 초과하는 장소는 건너뛰기
+                            
+                            # 거리 로깅 (디버깅 용도)
+                            print(f"    └ 장소 거리 확인: {place_name}, 중심점에서 {distance_to_center:.1f}m (반경: {cell_search_radius}m)")
+                            
                         # --- 장소 상세 정보 가져오기 및 처리 ---
                         place_details = get_place_details(place_id, API_KEY, language)
                         if not place_details or "result" not in place_details:

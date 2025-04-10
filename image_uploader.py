@@ -172,11 +172,11 @@ def main():
 
     script_dir = Path(__file__).resolve().parent
     # 입력 JSON 파일 경로 설정
-    input_json_name = "제주_전체_가게정보.json"
+    input_json_name = "판교_전체_가게정보.json"
     input_json_path = os.path.join(script_dir, "구글맵_데이터", input_json_name)
 
     # 출력 JSON 파일 경로 설정 (새 파일 이름)
-    output_json_name = "제주_전체_빵집_가게정보_processed.json"
+    output_json_name = "판교_전체_가게정보_processed.json"
     output_json_path = os.path.join(script_dir, "구글맵_데이터", output_json_name)
 
     if not os.path.exists(input_json_path):

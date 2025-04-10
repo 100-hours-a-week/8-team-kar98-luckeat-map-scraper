@@ -3,6 +3,7 @@ import json
 import mysql.connector
 from dotenv import load_dotenv
 from pathlib import Path
+import argparse  # 인자 처리를 위한 추가
 
 # .env 파일 로드
 load_dotenv()
@@ -18,7 +19,7 @@ CATEGORY_MAP = {
 }
 
 # 데이터베이스 연결 설정
-def get_db_connection():
+def get_db_connection(db_name):
     # 스크립트가 있는 디렉토리의 .env 파일을 명시적으로 로드
     script_dir = Path(__file__).resolve().parent
     dotenv_path = script_dir / '.env'
@@ -29,24 +30,27 @@ def get_db_connection():
     db_host = os.getenv('DB_HOST')
     db_user = os.getenv('DB_USER')
     db_password = os.getenv('DB_PASSWORD')
-    db_name = "prod"
     db_port = os.getenv('DB_PORT')
     
     print(f"DB Host: {db_host}")
     print(f"DB User: {db_user}")
-    print(f"DB Name: {db_name}")
+    print(f"DB Name: {db_name}")  # 인자로 받은 DB 이름 사용
     print(f"DB Port: {db_port}")
     
     # 연결 생성
-    connection = mysql.connector.connect(
-        host=db_host,
-        user=db_user,
-        password=db_password,
-        database=db_name,
-        port=db_port
-    )
-    
-    return connection
+    try:
+        connection = mysql.connector.connect(
+            host=db_host,
+            user=db_user,
+            password=db_password,
+            database=db_name,
+            port=db_port
+        )
+        print(f"데이터베이스 '{db_name}'에 성공적으로 연결되었습니다.")
+        return connection
+    except mysql.connector.Error as err:
+        print(f"데이터베이스 연결 오류: {err}")
+        raise
 
 # JSON 파일에서 데이터 로드
 def load_json_data(file_path):
@@ -57,6 +61,21 @@ def load_json_data(file_path):
 # 데이터를 DB에 저장
 def save_to_database(connection, data):
     cursor = connection.cursor()
+    
+    # 저장 성공/실패 개수 추적을 위한 카운터
+    success_count = 0
+    error_count = 0
+    
+    # 테이블 존재 여부 확인
+    try:
+        cursor.execute("SHOW TABLES LIKE 'store'")
+        if not cursor.fetchone():
+            print("주의: 'store' 테이블이 존재하지 않습니다.")
+            print("테이블 구조를 확인하세요.")
+            return
+    except mysql.connector.Error as err:
+        print(f"테이블 확인 오류: {err}")
+        return
     
     # SQL 삽입 쿼리
     insert_query = """
@@ -106,8 +125,6 @@ def save_to_database(connection, data):
         
         # 이미지 URL
         original_photo_url = store.get('photo_url', None)
-        # print(f"\n처리 시작: {name} (Place ID: {place_id})") # 로그 간소화
-        # print(f"원본 이미지 URL: {original_photo_url}") 
         
         # 리뷰 요약
         review_summary = store.get('review_summary', None)
@@ -115,10 +132,17 @@ def save_to_database(connection, data):
         # 카테고리 ID 매핑
         search_query = store.get('search_query', None)
         category_id = CATEGORY_MAP.get(search_query)
+        
+        # 데이터 검증 - 필수 필드 확인
+        if not place_id:
+            print(f"오류: place_id가 없는 레코드 발견 - {name}")
+            error_count += 1
+            continue
+            
+        if not category_id:
+            print(f"주의: 카테고리를 찾을 수 없음 - {name}, 검색 쿼리: {search_query}")
 
-        # 이미지 처리 로직 제거됨
-        # processed_photo_url = upload_image_to_s3(original_photo_url, place_id)
-        # print(f"S3 처리 후 이미지 URL: {processed_photo_url}")
+        print(f"이름: {name}")
 
         # 데이터 삽입 (store_img에 original_photo_url 사용)
         store_data = (
@@ -137,30 +161,60 @@ def save_to_database(connection, data):
         )
         
         try:
-            # 이미지 URL 관련 경고 제거
-            # if processed_photo_url is None:
-            #     print(f"주의: 이미지 URL이 없어 store_img에 NULL이 저장됩니다 ({name}, Place ID: {place_id})")
-            
             # DB 저장 시도
-            print(f"DB 저장 시도: {name} (Place ID: {place_id})") # 디버깅용 출력 업데이트
+            print(f"DB 저장 시도: {name} (Place ID: {place_id})")
             cursor.execute(insert_query, store_data)
+            success_count += 1
             print(f"가게 저장 완료: {name} (카테고리: {category_id})")
         except mysql.connector.Error as err:
+            error_count += 1
             print(f"DB 저장 오류 발생 ({name}): {err}")
+            print(f"SQL 쿼리: {cursor.statement}")  # 실행된 SQL 쿼리 출력
         except Exception as e:
+            error_count += 1
             print(f"처리 중 예상치 못한 오류 발생 ({name}): {e}")
     
     # 변경사항 저장
-    connection.commit()
+    try:
+        connection.commit()
+        print(f"\n저장 결과 요약:")
+        print(f"성공: {success_count}개")
+        print(f"실패: {error_count}개")
+    except mysql.connector.Error as err:
+        print(f"커밋 오류: {err}")
+        connection.rollback()
+        print("변경사항이 롤백되었습니다.")
+    
     cursor.close()
 
 def main():
+    # 커맨드 라인 인자 파싱
+    parser = argparse.ArgumentParser(description='JSON 데이터를 MySQL 데이터베이스에 저장')
+    parser.add_argument('--db', '-d', default='prod', help='사용할 데이터베이스 이름 (기본값: prod)')
+    args = parser.parse_args()
+    
+    # 인자에서 DB 이름 가져오기
+    db_name = args.db
+    print(f"사용할 데이터베이스: {db_name}")
+    
     connection = None
     try:
-        connection = get_db_connection()
+        connection = get_db_connection(db_name)
+
+        # 사용자에게 계속 진행할지 묻기
+        while True:
+            user_input = input("\n데이터베이스에 연결되었습니다. 계속 진행하시겠습니까? (y/n): ").strip().lower()
+            if user_input in ['y', 'yes']:
+                print("프로그램을 계속 진행합니다...")
+                break
+            elif user_input in ['n', 'no']:
+                print("사용자 요청으로 프로그램을 종료합니다.")
+                return
+            else:
+                print("잘못된 입력입니다. 'y' 또는 'n'을 입력해주세요.")
 
         # JSON 파일 경로를 새로 생성된 파일로 변경
-        json_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "구글맵_데이터", "제주_전체_빵집_가게정보_processed.json")
+        json_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "구글맵_데이터", "판교_전체_가게정보_processed.json")
         print(f"JSON 파일 경로: {json_file_path}")
 
         if not os.path.exists(json_file_path):
@@ -170,9 +224,33 @@ def main():
         store_data = load_json_data(json_file_path)
         print(f"로드된 가게 데이터 수: {len(store_data)}")
 
+        # 데이터베이스 테이블 정보 확인
+        try:
+            cursor = connection.cursor()
+            cursor.execute("DESCRIBE store")
+            columns = cursor.fetchall()
+            print("\n테이블 구조 확인:")
+            for column in columns:
+                print(f"  - {column[0]}: {column[1]}")
+            cursor.close()
+        except mysql.connector.Error as err:
+            print(f"테이블 구조 확인 오류: {err}")
+
+        # 다시 한번 사용자에게 데이터 저장을 진행할지 확인
+        while True:
+            user_input = input(f"\n총 {len(store_data)}개의 가게 데이터를 데이터베이스에 저장하시겠습니까? (y/n): ").strip().lower()
+            if user_input in ['y', 'yes']:
+                print("데이터 저장을 시작합니다...")
+                break
+            elif user_input in ['n', 'no']:
+                print("사용자 요청으로 데이터 저장을 취소합니다.")
+                return
+            else:
+                print("잘못된 입력입니다. 'y' 또는 'n'을 입력해주세요.")
+
         save_to_database(connection, store_data)
 
-        print("모든 가게 정보가 성공적으로 데이터베이스에 저장되었습니다.")
+        print("모든 가게 정보 처리가 완료되었습니다.")
     except mysql.connector.Error as db_err:
         print(f"데이터베이스 관련 오류 발생: {db_err}")
         if connection and connection.is_connected():
