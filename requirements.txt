@@ -2,4 +2,7 @@ requests
 pandas
 python-dotenv
 openai
-openpyxl 
+openpyxl
+mysql-connector-python
+boto3
+tqdm 
